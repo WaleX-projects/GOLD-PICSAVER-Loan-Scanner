@@ -10,6 +10,10 @@ servers:
 tags:
   - name: health
     description: Health operations
+  - name: templates
+    description: Dynamic loan form templates
+  - name: applicants
+    description: Applicant records and extraction
 paths:
   /healthz:
     get:
@@ -24,6 +28,109 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /templates/active:
+    get:
+      operationId: getActiveTemplate
+      tags: [templates]
+      summary: Get the current active form template
+      responses:
+        "200":
+          description: Active template
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FormTemplate"
+  /templates:
+    post:
+      operationId: createTemplate
+      tags: [templates]
+      summary: Create and activate a new form template version
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTemplateRequest"
+      responses:
+        "201":
+          description: Created template
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FormTemplate"
+  /extract:
+    post:
+      operationId: extractApplicant
+      tags: [applicants]
+      summary: Extract applicant fields using a template
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ExtractRequest"
+      responses:
+        "200":
+          description: Extracted applicant data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExtractionResult"
+  /applicants:
+    get:
+      operationId: listApplicants
+      tags: [applicants]
+      summary: List applicant records
+      responses:
+        "200":
+          description: Applicant records
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Applicant"
+    post:
+      operationId: upsertApplicant
+      tags: [applicants]
+      summary: Upsert an applicant using local_id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Applicant"
+      responses:
+        "200":
+          description: Saved applicant
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Applicant"
+        "201":
+          description: Created applicant
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Applicant"
+  /applicants/{id}:
+    get:
+      operationId: getApplicant
+      tags: [applicants]
+      summary: Get an applicant by id
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Applicant record
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Applicant"
 components:
   schemas:
     HealthStatus:
@@ -33,4 +140,72 @@ components:
           type: string
       required:
         - status
+    TemplateField:
+      type: object
+      properties:
+        key: { type: string }
+        label: { type: string }
+        type: { type: string, enum: [text, date, number, select, phone, email] }
+        section: { type: string }
+        options:
+          type: array
+          items: { type: string }
+        required: { type: boolean }
+        order: { type: integer }
+      required: [key, label, type, section, required, order]
+    FormTemplate:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        version: { type: integer }
+        fields:
+          type: array
+          items: { $ref: "#/components/schemas/TemplateField" }
+        is_active: { type: boolean }
+        created_at: { type: string, format: date-time }
+      required: [id, name, version, fields, is_active, created_at]
+    CreateTemplateRequest:
+      type: object
+      properties:
+        name: { type: string }
+        fields:
+          type: array
+          items: { $ref: "#/components/schemas/TemplateField" }
+      required: [name, fields]
+    ExtractRequest:
+      type: object
+      properties:
+        template_id: { type: string }
+        images:
+          type: array
+          items: { type: string }
+      required: [template_id]
+    ExtractionResult:
+      type: object
+      properties:
+        template_id: { type: string }
+        template_version: { type: integer }
+        data:
+          type: object
+          additionalProperties: { type: string }
+        confidence:
+          type: object
+          additionalProperties: { type: number }
+        mode: { type: string }
+      required: [template_id, template_version, data, confidence, mode]
+    Applicant:
+      type: object
+      additionalProperties: true
+      properties:
+        id: { type: string }
+        local_id: { type: string }
+        template_id: { type: string }
+        template_version: { type: integer }
+        data:
+          type: object
+          additionalProperties: { type: string }
+        status: { type: string }
+        sync_status: { type: string }
+      required: [local_id]
 

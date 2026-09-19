@@ -1,0 +1,185 @@
+# Build Prompt: GOLD PICSAVER Loan Application Scanner App
+
+Build a full-stack mobile app that lets a loan officer photograph paper
+GOLD PICSAVER loan application forms, extract the data with AI, review/edit
+it, and manage applicants — offline-first, with a **dynamic field schema**
+so new form fields can be added later (e.g. 6 months from now) without
+breaking the app, old data, or requiring a redeploy.
+
+## Stack
+- **Frontend:** React Native with Expo
+- **Backend:** FastAPI (Python)
+- **Database/Storage:** Supabase (Postgres + Storage + Auth)
+- **Local device storage:** SQLite (via `expo-sqlite`) for offline queue and cache
+- **AI extraction:** Vision-capable LLM (e.g. Claude or GPT-4o), prompted
+  dynamically from the current field template — not a hardcoded prompt
+
+---
+
+## 1. Why "dynamic" and how it works
+
+Instead of hardcoding columns like `full_name`, `phone_number`, etc., the
+whole system is **template-driven**:
+
+- A `form_templates` table defines the list of fields (name, label, type,
+  section, order, required) as a JSON array.
+- Applicant data is stored as a single `data` JSONB column keyed by field
+  name, not as fixed columns.
+- The AI extraction prompt is **generated at request time** from the active
+  template's field list — so adding a field to the template automatically
+  changes what the AI looks for on the next scan.
+- The frontend fetches the active template once (cached locally) and
+  **renders the form dynamically** from it — no app update needed to show
+  a new field.
+- Every applicant record stores which `template_version` it was captured
+  under, so old records are never broken or reinterpreted when the template
+  changes later — they just render with the field set active at the time.
+- Adding a field later = insert a new row of config into `form_templates`
+  (or a simple admin screen) — not a code change.
+
+This is the core design constraint for everything below.
+
+---
+
+## 2. Data Model (Supabase / Postgres)
+
+```sql
+form_templates
+  id (uuid, pk)
+  name (text)                    -- e.g. "GOLD PICSAVER Loan Form"
+  version (int)                  -- bump whenever fields change
+  fields (jsonb)                 -- see shape below
+  is_active (boolean)
+  created_at (timestamptz)
+
+-- fields jsonb shape, one entry per field:
+-- {
+--   "key": "full_name",
+--   "label": "Full Name",
+--   "type": "text" | "date" | "number" | "select" | "phone" | "email",
+--   "section": "Personal Information",
+--   "options": ["Male","Female"],   -- only for type "select"
+--   "required": true,
+--   "order": 1
+-- }
+
+applicants
+  id (uuid, pk)
+  local_id (uuid, unique)        -- reconciliation key from device
+  template_id (uuid, fk)
+  template_version (int)         -- snapshot of version at capture time
+  data (jsonb)                   -- { "full_name": "...", "phone_number": "...", ... }
+  raw_extracted_json (jsonb)     -- original AI output, for audit
+  status (text)                  -- pending_review, active, approved, rejected
+  created_at (timestamptz)
+  updated_at (timestamptz)
+
+application_images
+  id (uuid, pk)
+  applicant_id (uuid, fk)
+  storage_path (text)
+  page_number (int)
+```
+
+**Default seed template** (matches the current GOLD PICSAVER paper form):
+
+- Section "Personal Information": full_name, date_of_birth, gender,
+  marital_status, email_address, phone_number, residential_address,
+  id_type, id_number
+- Section "Employment & Financial Details": current_employer, job_title,
+  monthly_net_income, other_income_source, work_address
+- Section "Loan Request Details": requested_amount, loan_tenure_months,
+  purpose_of_loan, bank_name, account_number
+
+(Signature/date fields are skipped — nothing to extract there.)
+
+---
+
+## 3. Backend (FastAPI)
+
+**Endpoints:**
+- `GET /templates/active` — returns the current active template (id,
+  version, fields array). Frontend calls this on launch and caches it
+  locally; falls back to cached version if offline.
+- `POST /templates` — create a new template version (admin only). Bumping
+  fields here is the only step needed to "add a new field" system-wide.
+- `POST /extract` — accepts image(s) **and** a `template_id`. Builds the AI
+  prompt dynamically: loop over `fields`, ask the model to return a JSON
+  object with exactly those keys (plus a `confidence` per field), fall back
+  to `"unknown"` for unreadable ones. Idempotent per image hash.
+- `POST /applicants` — upsert an applicant record (`data` jsonb + which
+  `template_id`/`template_version` it used) — used by the sync manager.
+- `GET /applicants` / `GET /applicants/{id}` — list/detail, joins in the
+  template so old records render correctly even after templates change.
+
+**Dynamic extraction prompt (pseudocode):**
+```python
+def build_extraction_prompt(template):
+    field_lines = "\n".join(
+        f"- {f['key']} ({f['type']}): {f['label']}" for f in template["fields"]
+    )
+    return f"""
+    Extract the following fields from this loan application form image.
+    Return ONLY a JSON object with these exact keys. Use "unknown" for
+    anything illegible. Include a "confidence" (0-1) per field.
+
+    Fields:
+    {field_lines}
+    """
+```
+
+---
+
+## 4. Frontend (React Native / Expo)
+
+**Screens:**
+1. **Camera/Scan screen** — photograph the form (multi-page supported),
+   compress with `expo-image-manipulator`, tag with the currently cached
+   `template_id`.
+2. **Review/Edit screen** — **renders inputs dynamically** from the
+   template's `fields` array (map `type` → input component: text, date
+   picker, number, dropdown for `select`, phone/email keyboard variants).
+   Low-confidence fields from extraction are visually flagged.
+3. **Applicants list screen** — sync status badge per record (`Pending
+   Upload`, `Syncing`, `Synced`, `Failed`); searchable/filterable.
+4. **Applicant detail screen** — renders the record's saved `data` using
+   the field labels from the `template_version` it was captured with (not
+   necessarily the current active template), plus a **Call** button
+   (`Linking.openURL('tel:...')`).
+
+**Template caching:**
+- On app launch (and whenever online), fetch `GET /templates/active` and
+  store it in SQLite. If a newer `version` comes back, update the cache —
+  new scans immediately use the new field set, no app store update needed.
+- If offline, use the last cached template so scanning never blocks.
+
+**Offline-first sync logic** (unchanged from before):
+- New scans save immediately to local SQLite with status `pending`.
+- `@react-native-community/netinfo` detects connectivity changes.
+- Background sync manager walks `pending`/`failed` records: uploads images
+  → Storage, calls `/extract` if not yet extracted, upserts to
+  `applicants`, marks `synced` or `failed` (with retry count).
+- On successful sync batch, fire a local notification
+  (`expo-notifications`), e.g. "3 applications synced successfully."
+- `local_id` (device-generated UUID) reconciles offline-created records
+  with the server `id`.
+
+---
+
+## 5. Build order for Replit
+
+1. Scaffold Expo app with navigation (camera → review → list → detail).
+2. Scaffold FastAPI backend with `/templates/active` (seeded with the
+   GOLD PICSAVER field list above) and a mocked `/extract` response first.
+3. Wire Supabase: `form_templates`, `applicants`, `application_images`
+   tables + Storage bucket + Auth.
+4. Implement local SQLite mirroring `applicants` (with `data` as a JSON
+   text column) plus cached `form_templates` and a `sync_status` column.
+5. Build the **dynamic form renderer** (Review/Edit screen) driven by the
+   cached template — this is the piece that makes new fields "just work."
+6. Build the sync manager and connectivity listener.
+7. Wire real AI extraction in `/extract`, using the dynamic prompt builder.
+8. Add notifications on successful sync.
+9. Polish: retry/backoff on failed syncs, manual "Retry sync" button,
+   pull-to-refresh, and a simple admin screen (or just Supabase table
+   editor for now) to add fields to `form_templates` later.

@@ -1,6 +1,6 @@
-# [Project name]
+# GOLD PICSAVER Loan Scanner
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+An offline-first Expo app for photographing GOLD PICSAVER loan forms, reviewing extracted applicant data, and keeping a searchable local applicant workspace.
 
 ## Run & Operate
 
@@ -14,6 +14,7 @@ _Replace the heading above with the project's name, and this line with one sente
 ## Stack
 
 - pnpm workspaces, Node.js 24, TypeScript 5.9
+- Mobile: Expo 57 + Expo Router + React Native
 - API: Express 5
 - DB: PostgreSQL + Drizzle ORM
 - Validation: Zod (`zod/v4`), `drizzle-zod`
@@ -22,23 +23,35 @@ _Replace the heading above with the project's name, and this line with one sente
 
 ## Where things live
 
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
+- `artifacts/gold-picsaver-scanner/` — Expo mobile app and offline applicant workspace
+- `artifacts/gold-picsaver-scanner/lib/app-state.tsx` — dynamic template and AsyncStorage-backed applicant state
+- `artifacts/gold-picsaver-scanner/app/` — overview, scan, review, applicants, and applicant detail routes
+- `artifacts/api-server/src/routes/templates.ts` — active-template, extraction, and applicant sync API scaffold
+- `lib/api-spec/openapi.yaml` — source of truth for the API contract
 
 ## Architecture decisions
 
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
+- Form fields are defined by a versioned template and applicant values are stored as a keyed data object, so new fields do not require a mobile redeploy.
+- The first mobile build persists applicants in AsyncStorage and keeps sync status on each record; the API is ready for the next Supabase-backed sync phase.
+- Extraction is intentionally mocked in the API scaffold and the review screen surfaces low-confidence values for correction before save.
+- Camera capture uses the native Expo image picker camera on device and a library-picker fallback in web preview.
 
 ## Product
 
-_Describe the high-level user-facing capabilities of this app once they exist._
+- Start a new scan with multi-page capture.
+- Review a dynamically rendered GOLD PICSAVER field set with flagged fields.
+- Save applicants locally for offline use.
+- Search applicants and open a detail view with a direct call action.
+- View pending review and sync status at a glance.
 
 ## User preferences
 
-_Populate as you build — explicit user instructions worth remembering across sessions._
+No additional preferences recorded.
 
 ## Gotchas
 
-_Populate as you build — sharp edges, "always run X before Y" rules._
+- The API routes currently use in-memory storage as a development scaffold; Supabase persistence and real vision extraction are the next production integrations.
+- Expo preview may log a non-fatal React Native DevTools `libglib` warning in this environment while Metro continues to serve the app.
 
 ## Pointers
 
