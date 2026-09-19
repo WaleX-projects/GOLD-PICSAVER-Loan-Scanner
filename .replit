@@ -18,3 +18,11 @@ expertMode = true
 [postMerge]
 path = "scripts/post-merge.sh"
 timeoutMs = 20000
+
+[userenv]
+
+[userenv.shared]
+EXPO_TOKEN = "-k7X7yl6YrsjrmwO2uZPL7hmW5a1XHWWVOlg3KTf"
+
+[nix]
+packages = ["nano"]
